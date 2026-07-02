@@ -129,6 +129,29 @@ fn run_runtime(config: AndroidRuntimeConfig, stop_rx: oneshot::Receiver<()>) -> 
     runtime.block_on(async move { run_async(config, stop_rx).await })
 }
 
+/// 自动探测可用的串口设备
+fn auto_detect_serial_port() -> Option<String> {
+    // 常见 USB 串口设备路径
+    let candidates = [
+        "/dev/ttyUSB0",
+        "/dev/ttyUSB1",
+        "/dev/ttyACM0",
+        "/dev/ttyACM1",
+        "/dev/ttyS0",
+        "/dev/ttyS1",
+    ];
+    
+    for port in &candidates {
+        if std::path::Path::new(port).exists() {
+            tracing::info!("Auto-detected serial port: {}", port);
+            return Some(port.to_string());
+        }
+    }
+    
+    tracing::warn!("No serial port auto-detected");
+    None
+}
+
 async fn run_async(
     config: AndroidRuntimeConfig,
     stop_rx: oneshot::Receiver<()>,
@@ -136,21 +159,12 @@ async fn run_async(
     let (db, config_store, mut app_config) =
         load_runtime_config(&PathBuf::from(&config.data_dir), &config).await?;
 
-    // ===== 环境变量覆盖 HID 配置（与 Linux 版行为一致）=====
-    if let Ok(backend_str) = std::env::var("ONE_KVM_HID_BACKEND") {
-        match backend_str.to_lowercase().as_str() {
-            "otg" => app_config.hid.backend = config::HidBackend::Otg,
-            "ch9329" => app_config.hid.backend = config::HidBackend::Ch9329,
-            "none" => app_config.hid.backend = config::HidBackend::None,
-            _ => tracing::warn!("Unknown ONE_KVM_HID_BACKEND value: {}", backend_str),
-        }
-        tracing::info!(
-            "Environment override: ONE_KVM_HID_BACKEND={} -> hid.backend={:?}",
-            backend_str,
-            app_config.hid.backend
-        );
-    }
-
+    // ===== Android HID 配置：默认 CH9329，支持环境变量覆盖 =====
+    
+    // 1. 默认使用 CH9329（Android 上 OTG 通常不可用）
+    app_config.hid.backend = config::HidBackend::Ch9329;
+    
+    // 2. 环境变量覆盖串口路径（优先）
     if let Ok(port) = std::env::var("ONE_KVM_CH9329_PORT") {
         if !port.is_empty() {
             app_config.hid.ch9329_port = port.clone();
@@ -159,8 +173,19 @@ async fn run_async(
                 port
             );
         }
+    } else {
+        // 3. 环境变量未设置，尝试自动探测
+        if let Some(detected) = auto_detect_serial_port() {
+            app_config.hid.ch9329_port = detected;
+            tracing::info!("Auto-selected serial port: {}", app_config.hid.ch9329_port);
+        } else {
+            // 4. 探测失败，使用默认 /dev/ttyUSB0（即使不存在，后续会报错）
+            app_config.hid.ch9329_port = "/dev/ttyUSB0".to_string();
+            tracing::warn!("No serial port found, falling back to default /dev/ttyUSB0");
+        }
     }
-
+    
+    // 5. 波特率环境变量覆盖
     if let Ok(baud_str) = std::env::var("ONE_KVM_CH9329_BAUD") {
         if let Ok(baud) = baud_str.parse::<u32>() {
             app_config.hid.ch9329_baudrate = baud;
@@ -170,7 +195,8 @@ async fn run_async(
             );
         }
     }
-
+    
+    // 6. hybrid_mouse 环境变量覆盖
     if let Ok(hybrid_str) = std::env::var("ONE_KVM_CH9329_HYBRID_MOUSE") {
         app_config.hid.ch9329_hybrid_mouse =
             hybrid_str.to_lowercase() == "true" || hybrid_str == "1";
@@ -179,12 +205,19 @@ async fn run_async(
             app_config.hid.ch9329_hybrid_mouse
         );
     }
-    // 注意：HidConfig 没有 otg_enabled 字段，OTG 是否启用由 hid.backend 决定
+    
+    // 7. 可选：ONE_KVM_HID_BACKEND=none 禁用 HID
+    if let Ok(backend_str) = std::env::var("ONE_KVM_HID_BACKEND") {
+        if backend_str.to_lowercase() == "none" {
+            app_config.hid.backend = config::HidBackend::None;
+            tracing::info!("Environment override: HID disabled");
+        }
+    }
     // =====================================================
 
-    // 持久化环境变量覆盖后的配置
+    // 持久化配置到数据库
     if let Err(err) = config_store.set(app_config.clone()).await {
-        tracing::warn!("Failed to persist env-override config: {}", err);
+        tracing::warn!("Failed to persist config: {}", err);
     }
 
     let (shutdown_tx, _) = broadcast::channel::<ShutdownAction>(1);
