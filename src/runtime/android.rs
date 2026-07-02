@@ -179,20 +179,13 @@ async fn run_async(
             app_config.hid.ch9329_hybrid_mouse
         );
     }
-
-    if let Ok(otg_str) = std::env::var("ONE_KVM_OTG_ENABLED") {
-        app_config.hid.otg_enabled = otg_str.to_lowercase() == "true" || otg_str == "1";
-        tracing::info!(
-            "Environment override: ONE_KVM_OTG_ENABLED={}",
-            app_config.hid.otg_enabled
-        );
-    }
+    // 注意：HidConfig 没有 otg_enabled 字段，OTG 是否启用由 hid.backend 决定
+    // =====================================================
 
     // 持久化环境变量覆盖后的配置
     if let Err(err) = config_store.set(app_config.clone()).await {
         tracing::warn!("Failed to persist env-override config: {}", err);
     }
-    // =====================================================
 
     let (shutdown_tx, _) = broadcast::channel::<ShutdownAction>(1);
     let state = build_app_state(
