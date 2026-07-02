@@ -123,10 +123,18 @@ jobs:
               set -e
               cd /workspace/android/native
 
-              export ANDROID_NDK_HOME=/opt/android-ndk
+              # NDK 实际路径
+              export ANDROID_NDK_HOME=/root/android-sdk/ndk/27.3.13750724
+              export ANDROID_NDK_ROOT=$ANDROID_NDK_HOME
               export PATH=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH
-              export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang
 
+              # 编译器路径
+              export CC_aarch64_linux_android=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang
+              export CXX_aarch64_linux_android=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang++
+              export AR_aarch64_linux_android=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
+              export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$CC_aarch64_linux_android
+
+              # 库搜索路径
               export LIBYUV_LIB_DIR=/workspace/dist/android-libyuv/lib
               export LIBYUV_INCLUDE_DIR=/workspace/dist/android-libyuv/include
               export TURBOJPEG_LIB_DIR=/workspace/dist/android-turbojpeg/lib
@@ -137,7 +145,7 @@ jobs:
               export OPUS_INCLUDE_DIR=/workspace/dist/android-opus/include
               export FFMPEG_DIR=/workspace/dist/android-ffmpeg-mediacodec
 
-              cargo build --release --bin one-kvm-android-host                 --target aarch64-linux-android                 --config "target.aarch64-linux-android.linker=\"$CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER\""
+              cargo build --release --bin one-kvm-android-host                 --target aarch64-linux-android
 
               cp /workspace/android/native/target/aarch64-linux-android/release/one-kvm-android-host                  /workspace/target/android-arm64-binary/one-kvm-arm64
             '
