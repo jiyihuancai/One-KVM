@@ -129,9 +129,8 @@ fn run_runtime(config: AndroidRuntimeConfig, stop_rx: oneshot::Receiver<()>) -> 
     runtime.block_on(async move { run_async(config, stop_rx).await })
 }
 
-/// 自动探测可用的串口设备
+/// 自动探测可用的串口设备（与 Linux 版一致）
 fn auto_detect_serial_port() -> Option<String> {
-    // 常见 USB 串口设备路径
     let candidates = [
         "/dev/ttyUSB0",
         "/dev/ttyUSB1",
@@ -140,14 +139,14 @@ fn auto_detect_serial_port() -> Option<String> {
         "/dev/ttyS0",
         "/dev/ttyS1",
     ];
-    
+
     for port in &candidates {
         if std::path::Path::new(port).exists() {
             tracing::info!("Auto-detected serial port: {}", port);
             return Some(port.to_string());
         }
     }
-    
+
     tracing::warn!("No serial port auto-detected");
     None
 }
@@ -159,61 +158,82 @@ async fn run_async(
     let (db, config_store, mut app_config) =
         load_runtime_config(&PathBuf::from(&config.data_dir), &config).await?;
 
-    // ===== Android HID 配置：默认 CH9329，支持环境变量覆盖 =====
+    // ===== 强制恢复 Linux 版 HID 配置行为 =====
     
-    // 1. 默认使用 CH9329（Android 上 OTG 通常不可用）
-    app_config.hid.backend = config::HidBackend::Ch9329;
+    // 保存 apply_platform_defaults 之前的原始配置
+    let original_backend = app_config.hid.backend.clone();
+    let original_port = app_config.hid.ch9329_port.clone();
+    let original_baud = app_config.hid.ch9329_baudrate;
+    let original_hybrid = app_config.hid.ch9329_hybrid_mouse;
     
+    tracing::info!(
+        "Pre-default HID config: backend={:?}, port='{}', baud={}, hybrid={}",
+        original_backend, original_port, original_baud, original_hybrid
+    );
+
+    // 1. 环境变量覆盖 HID 后端类型（与 Linux 版完全一致）
+    if let Ok(backend_str) = std::env::var("ONE_KVM_HID_BACKEND") {
+        match backend_str.to_lowercase().as_str() {
+            "otg" => app_config.hid.backend = config::HidBackend::Otg,
+            "ch9329" => app_config.hid.backend = config::HidBackend::Ch9329,
+            "none" => app_config.hid.backend = config::HidBackend::None,
+            _ => tracing::warn!("Unknown ONE_KVM_HID_BACKEND: {}", backend_str),
+        }
+        tracing::info!("Env override: ONE_KVM_HID_BACKEND={} -> {:?}", backend_str, app_config.hid.backend);
+    }
+
     // 2. 环境变量覆盖串口路径（优先）
     if let Ok(port) = std::env::var("ONE_KVM_CH9329_PORT") {
         if !port.is_empty() {
             app_config.hid.ch9329_port = port.clone();
-            tracing::info!(
-                "Environment override: ONE_KVM_CH9329_PORT={}",
-                port
-            );
+            tracing::info!("Env override: ONE_KVM_CH9329_PORT={}", port);
         }
-    } else {
-        // 3. 环境变量未设置，尝试自动探测
+    } else if app_config.hid.ch9329_port.is_empty() {
+        // 环境变量未设置且配置为空，尝试自动探测
         if let Some(detected) = auto_detect_serial_port() {
             app_config.hid.ch9329_port = detected;
             tracing::info!("Auto-selected serial port: {}", app_config.hid.ch9329_port);
         } else {
-            // 4. 探测失败，使用默认 /dev/ttyUSB0（即使不存在，后续会报错）
+            // 探测失败，回退默认
             app_config.hid.ch9329_port = "/dev/ttyUSB0".to_string();
-            tracing::warn!("No serial port found, falling back to default /dev/ttyUSB0");
+            tracing::warn!("No serial port found, fallback to /dev/ttyUSB0");
         }
     }
-    
-    // 5. 波特率环境变量覆盖
+
+    // 3. 波特率环境变量覆盖
     if let Ok(baud_str) = std::env::var("ONE_KVM_CH9329_BAUD") {
         if let Ok(baud) = baud_str.parse::<u32>() {
             app_config.hid.ch9329_baudrate = baud;
-            tracing::info!(
-                "Environment override: ONE_KVM_CH9329_BAUD={}",
-                baud
-            );
+            tracing::info!("Env override: ONE_KVM_CH9329_BAUD={}", baud);
         }
     }
-    
-    // 6. hybrid_mouse 环境变量覆盖
+
+    // 4. hybrid_mouse 环境变量覆盖
     if let Ok(hybrid_str) = std::env::var("ONE_KVM_CH9329_HYBRID_MOUSE") {
         app_config.hid.ch9329_hybrid_mouse =
             hybrid_str.to_lowercase() == "true" || hybrid_str == "1";
-        tracing::info!(
-            "Environment override: ONE_KVM_CH9329_HYBRID_MOUSE={}",
-            app_config.hid.ch9329_hybrid_mouse
+        tracing::info!("Env override: ONE_KVM_CH9329_HYBRID_MOUSE={}", app_config.hid.ch9329_hybrid_mouse);
+    }
+
+    // 5. 确保 backend 与端口配置一致
+    if !app_config.hid.ch9329_port.is_empty() 
+        && !matches!(app_config.hid.backend, config::HidBackend::Ch9329) 
+        && !matches!(app_config.hid.backend, config::HidBackend::None) {
+        tracing::warn!(
+            "CH9329 port '{}' set but backend is {:?}, forcing to Ch9329",
+            app_config.hid.ch9329_port, app_config.hid.backend
         );
+        app_config.hid.backend = config::HidBackend::Ch9329;
     }
-    
-    // 7. 可选：ONE_KVM_HID_BACKEND=none 禁用 HID
-    if let Ok(backend_str) = std::env::var("ONE_KVM_HID_BACKEND") {
-        if backend_str.to_lowercase() == "none" {
-            app_config.hid.backend = config::HidBackend::None;
-            tracing::info!("Environment override: HID disabled");
-        }
-    }
-    // =====================================================
+
+    tracing::info!(
+        "Final HID config: backend={:?}, port='{}', baud={}, hybrid={}",
+        app_config.hid.backend, 
+        app_config.hid.ch9329_port,
+        app_config.hid.ch9329_baudrate, 
+        app_config.hid.ch9329_hybrid_mouse
+    );
+    // ============================================
 
     // 持久化配置到数据库
     if let Err(err) = config_store.set(app_config.clone()).await {
@@ -303,7 +323,40 @@ async fn load_runtime_config(
         .map_err(|err| format!("failed to load config: {err}"))?;
 
     let mut config = (*config_store.get()).clone();
+    
+    // 记录 apply_platform_defaults 前后的配置变化
+    let pre_backend = config.hid.backend.clone();
+    let pre_port = config.hid.ch9329_port.clone();
+    let pre_baud = config.hid.ch9329_baudrate;
+    let pre_hybrid = config.hid.ch9329_hybrid_mouse;
+    
     config.apply_platform_defaults();
+    
+    if config.hid.backend != pre_backend {
+        tracing::warn!(
+            "apply_platform_defaults changed hid.backend: {:?} -> {:?}",
+            pre_backend, config.hid.backend
+        );
+    }
+    if config.hid.ch9329_port != pre_port {
+        tracing::warn!(
+            "apply_platform_defaults changed ch9329_port: '{}' -> '{}'",
+            pre_port, config.hid.ch9329_port
+        );
+    }
+    if config.hid.ch9329_baudrate != pre_baud {
+        tracing::warn!(
+            "apply_platform_defaults changed ch9329_baudrate: {} -> {}",
+            pre_baud, config.hid.ch9329_baudrate
+        );
+    }
+    if config.hid.ch9329_hybrid_mouse != pre_hybrid {
+        tracing::warn!(
+            "apply_platform_defaults changed ch9329_hybrid_mouse: {} -> {}",
+            pre_hybrid, config.hid.ch9329_hybrid_mouse
+        );
+    }
+    
     config.web.bind_address = runtime_config.bind_address.clone();
     config.web.bind_addresses = vec![runtime_config.bind_address.clone()];
     config.web.http_port = runtime_config.port;
