@@ -133,8 +133,67 @@ async fn run_async(
     config: AndroidRuntimeConfig,
     stop_rx: oneshot::Receiver<()>,
 ) -> Result<(), String> {
-    let (db, config_store, app_config) =
+    let (db, config_store, mut app_config) =
         load_runtime_config(&PathBuf::from(&config.data_dir), &config).await?;
+
+    // ===== 环境变量覆盖 HID 配置（与 Linux 版行为一致）=====
+    if let Ok(backend_str) = std::env::var("ONE_KVM_HID_BACKEND") {
+        match backend_str.to_lowercase().as_str() {
+            "otg" => app_config.hid.backend = config::HidBackend::Otg,
+            "ch9329" => app_config.hid.backend = config::HidBackend::Ch9329,
+            "none" => app_config.hid.backend = config::HidBackend::None,
+            _ => tracing::warn!("Unknown ONE_KVM_HID_BACKEND value: {}", backend_str),
+        }
+        tracing::info!(
+            "Environment override: ONE_KVM_HID_BACKEND={} -> hid.backend={:?}",
+            backend_str,
+            app_config.hid.backend
+        );
+    }
+
+    if let Ok(port) = std::env::var("ONE_KVM_CH9329_PORT") {
+        if !port.is_empty() {
+            app_config.hid.ch9329_port = port.clone();
+            tracing::info!(
+                "Environment override: ONE_KVM_CH9329_PORT={}",
+                port
+            );
+        }
+    }
+
+    if let Ok(baud_str) = std::env::var("ONE_KVM_CH9329_BAUD") {
+        if let Ok(baud) = baud_str.parse::<u32>() {
+            app_config.hid.ch9329_baudrate = baud;
+            tracing::info!(
+                "Environment override: ONE_KVM_CH9329_BAUD={}",
+                baud
+            );
+        }
+    }
+
+    if let Ok(hybrid_str) = std::env::var("ONE_KVM_CH9329_HYBRID_MOUSE") {
+        app_config.hid.ch9329_hybrid_mouse =
+            hybrid_str.to_lowercase() == "true" || hybrid_str == "1";
+        tracing::info!(
+            "Environment override: ONE_KVM_CH9329_HYBRID_MOUSE={}",
+            app_config.hid.ch9329_hybrid_mouse
+        );
+    }
+
+    if let Ok(otg_str) = std::env::var("ONE_KVM_OTG_ENABLED") {
+        app_config.hid.otg_enabled = otg_str.to_lowercase() == "true" || otg_str == "1";
+        tracing::info!(
+            "Environment override: ONE_KVM_OTG_ENABLED={}",
+            app_config.hid.otg_enabled
+        );
+    }
+
+    // 持久化环境变量覆盖后的配置
+    if let Err(err) = config_store.set(app_config.clone()).await {
+        tracing::warn!("Failed to persist env-override config: {}", err);
+    }
+    // =====================================================
+
     let (shutdown_tx, _) = broadcast::channel::<ShutdownAction>(1);
     let state = build_app_state(
         PathBuf::from(&config.data_dir),
@@ -447,9 +506,9 @@ async fn build_app_state(
         Ok(()) => true,
         Err(e) => {
             tracing::warn!(
-                    "Android third-party access codec configuration is invalid; RustDesk/VNC/RTSP will not start: {}",
-                    e
-                );
+                "Android third-party access codec configuration is invalid; RustDesk/VNC/RTSP will not start: {}",
+                e
+            );
             false
         }
     };
@@ -687,7 +746,8 @@ fn spawn_device_info_broadcaster(state: Arc<AppState>, events: Arc<EventBus>) {
                 Err(_) => {}
             }
 
-            if pending_broadcast && last_broadcast.elapsed() >= Duration::from_millis(DEBOUNCE_MS) {
+            if pending_broadcast && last_broadcast.elapsed() >= Duration::from_millis(DEBOUNCE_MS)
+            {
                 state.publish_device_info().await;
                 last_broadcast = Instant::now();
                 pending_broadcast = false;
