@@ -134,18 +134,18 @@ jobs:
               export AR_aarch64_linux_android=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
               export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$CC_aarch64_linux_android
 
-              # pkg-config 交叉编译配置
+              # pkg-config 交叉编译配置 - alsa.pc 在 arm64-v8a 子目录下
               export PKG_CONFIG_ALLOW_CROSS=1
-              export PKG_CONFIG_SYSROOT_DIR=/workspace/dist/android-alsa
-              export PKG_CONFIG_PATH=/workspace/dist/android-alsa/lib/pkgconfig
+              export PKG_CONFIG_SYSROOT_DIR=/workspace/dist/android-alsa/arm64-v8a
+              export PKG_CONFIG_PATH=/workspace/dist/android-alsa/arm64-v8a/lib/pkgconfig
 
-              # 库搜索路径
+              # 库搜索路径 - 也指向 arm64-v8a 子目录
               export LIBYUV_LIB_DIR=/workspace/dist/android-libyuv/lib
               export LIBYUV_INCLUDE_DIR=/workspace/dist/android-libyuv/include
               export TURBOJPEG_LIB_DIR=/workspace/dist/android-turbojpeg/lib
               export TURBOJPEG_INCLUDE_DIR=/workspace/dist/android-turbojpeg/include
-              export ALSA_LIB_DIR=/workspace/dist/android-alsa/lib
-              export ALSA_INCLUDE_DIR=/workspace/dist/android-alsa/include
+              export ALSA_LIB_DIR=/workspace/dist/android-alsa/arm64-v8a/lib
+              export ALSA_INCLUDE_DIR=/workspace/dist/android-alsa/arm64-v8a/include
               export OPUS_LIB_DIR=/workspace/dist/android-opus/lib
               export OPUS_INCLUDE_DIR=/workspace/dist/android-opus/include
               export FFMPEG_DIR=/workspace/dist/android-ffmpeg-mediacodec
