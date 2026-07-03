@@ -123,6 +123,9 @@ jobs:
               set -e
               cd /workspace/android/native
 
+              # 确保 make 可用
+              apt-get update && apt-get install -y --no-install-recommends make || true
+
               # NDK 路径
               export ANDROID_NDK_HOME=/root/android-sdk/ndk/27.3.13750724
               export ANDROID_NDK_ROOT=$ANDROID_NDK_HOME
@@ -134,12 +137,15 @@ jobs:
               export AR_aarch64_linux_android=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
               export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$CC_aarch64_linux_android
 
-              # pkg-config 交叉编译配置 - alsa.pc 在 arm64-v8a 子目录下
+              # CMake 配置
+              export CMAKE_MAKE_PROGRAM=/usr/bin/make
+
+              # pkg-config 交叉编译配置
               export PKG_CONFIG_ALLOW_CROSS=1
               export PKG_CONFIG_SYSROOT_DIR=/workspace/dist/android-alsa/arm64-v8a
               export PKG_CONFIG_PATH=/workspace/dist/android-alsa/arm64-v8a/lib/pkgconfig
 
-              # 库搜索路径 - 也指向 arm64-v8a 子目录
+              # 库搜索路径
               export LIBYUV_LIB_DIR=/workspace/dist/android-libyuv/lib
               export LIBYUV_INCLUDE_DIR=/workspace/dist/android-libyuv/include
               export TURBOJPEG_LIB_DIR=/workspace/dist/android-turbojpeg/lib
